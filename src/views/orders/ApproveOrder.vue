@@ -74,14 +74,14 @@
                 Solicitar Alteração
             </v-btn>
             <v-btn
-                @click="approveOrder"
+                @click="approveAndCreateVhsysOrder"
                 color="green"
                 variant="flat"
                 size="large"
                 :loading="isSubmitting"
             >
                  <v-icon start>mdi-check-all</v-icon>
-                Aprovar e Encaminhar
+                Aprovar e Faturar no VHSYS
             </v-btn>
         </div>
       </v-card-text>
@@ -101,6 +101,7 @@
 import { ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { supabase } from '@/api/supabase';
+import { createVhsysOrder } from '@/api/vhsys_api';
 import { useUserStore } from '@/stores/user';
 import RequestChangesModal from '@/components/RequestChangesModal.vue';
 
@@ -111,8 +112,18 @@ type Order = {
   status: string;
   designer_id: string;
   details: {
+    stamp_details: string;
     fabric_type: string;
     final_art_url: string;
+    vhsys: {
+        id_cliente_vhsys: number;
+        fantasia_cliente_vhsys: string; // Adicionado
+        id_vendedor_vhsys: number;
+        razao_vendedor_vhsys: string; // Adicionado
+        id_produto_vhsys: number;
+        desc_produto_vhsys: string;
+        valor_unit_produto: number;
+    }
   };
 };
 
@@ -143,38 +154,85 @@ const fetchOrderDetails = async () => {
 
 const isImage = (url: string) => /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(url);
 
-const approveOrder = async () => {
-    if (!order.value || !userStore.profile) return;
+const approveAndCreateVhsysOrder = async () => {
+    if (!order.value || !userStore.profile || !order.value.details.vhsys) {
+        error.value = "Dados essenciais do pedido ou do VHSYS estão faltando.";
+        return;
+    }
+
+    const { vhsys_access_token, vhsys_secret_access_token } = userStore.profile;
+    if (!vhsys_access_token || !vhsys_secret_access_token) {
+        error.value = "As suas credenciais do VHSYS não foram encontradas no seu perfil. Por favor, contate um administrador.";
+        return;
+    }
+
     isSubmitting.value = true;
     try {
-        // --- MUDANÇA PRINCIPAL ---
-        // Em vez de 'approve_order_and_schedule', chamamos uma nova função
-        // que irá calcular a melhor data e definir o status para 'production_queue'.
         const { error: rpcError } = await supabase.rpc('schedule_order_automatically', {
             p_order_id: order.value.id
         });
         if (rpcError) throw rpcError;
 
-        // O log agora reflete que o pedido foi agendado.
+        const valorUnitario = order.value.details.vhsys.valor_unit_produto;
+        const quantidade = order.value.quantity_meters;
+        const valorTotalProduto = valorUnitario * quantidade;
+
+        const vhsysPayload = {
+            id_cliente: order.value.details.vhsys.id_cliente_vhsys,
+            id_vendedor: order.value.details.vhsys.id_vendedor_vhsys,
+            nome_cliente: order.value.details.vhsys.fantasia_cliente_vhsys, // Usa o nome vindo do VHSYS
+            nome_vendedor: order.value.details.vhsys.razao_vendedor_vhsys, // Usa o nome vindo do VHSYS
+            status_pedido: "Em Aberto",
+            valor_total_nota: valorTotalProduto,
+            obs_pedido: order.value.details.stamp_details || '',
+            produtos: [
+                {
+                    id_produto: order.value.details.vhsys.id_produto_vhsys,
+                    desc_produto: order.value.details.vhsys.desc_produto_vhsys,
+                    qtde_produto: quantidade,
+                    valor_unit_produto: valorUnitario,
+                    valor_total_produto: valorTotalProduto
+                }
+            ]
+        };
+
+        const vhsysResponse = await createVhsysOrder(
+            vhsysPayload,
+            vhsys_access_token,
+            vhsys_secret_access_token
+        );
+
+        if (vhsysResponse.data.status !== 'success') {
+            throw new Error(`Erro retornado pelo VHSYS: ${JSON.stringify(vhsysResponse.data.data)}`);
+        }
+
+        const vhsysOrderId = vhsysResponse.data.data.id_ped;
+        console.log(`Pedido ${vhsysOrderId} criado com sucesso no VHSYS!`);
+
+        const updatedDetails = { ...order.value.details, vhsys_order_id: vhsysOrderId };
+        await supabase
+            .from('orders')
+            .update({ details: updatedDetails })
+            .eq('id', order.value.id);
+
         await supabase.from('order_logs').insert({
             order_id: order.value.id,
             profile_id: userStore.profile.id,
             log_type: 'STATUS_CHANGE',
-            description: 'Arte aprovada. Pedido encaminhado para a fila de produção e agendamento automático.'
+            description: `Arte aprovada. Pedido faturado no VHSYS com o ID: ${vhsysOrderId}.`
         });
 
-        // Notifica o time de produção ou administradores.
         await supabase.from('notifications').insert({
             sender_id: userStore.profile.id,
-            content: `Pedido de "${order.value.customer_name}" foi APROVADO e agendado.`,
-            redirect_url: '/pedidos' // Link para a Agenda de Produção
+            content: `Pedido de "${order.value.customer_name}" foi APROVADO e faturado no VHSYS.`,
+            redirect_url: '/pedidos'
         });
 
-        router.push({ name: 'Orders' }); // Redireciona para a agenda
+        router.push({ name: 'Orders' });
 
     } catch(e: any) {
-        alert(`Erro ao aprovar e agendar o pedido: ${e.message}`);
-        error.value = `Erro: ${e.message}`; // Mostra o erro na tela
+        alert(`Erro ao aprovar e faturar o pedido: ${e.message}`);
+        error.value = `Erro: ${e.message}`;
     } finally {
         isSubmitting.value = false;
     }

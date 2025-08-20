@@ -12,15 +12,57 @@
         <template v-slot:item.1>
           <v-card flat color="transparent">
             <v-card-text>
-              <h3 class="text-h6 font-weight-bold mb-6 text-center">Informações do Cliente e Entrada</h3>
+              <h3 class="text-h6 font-weight-bold mb-6 text-center">Informações do Cliente e Vendedor</h3>
               <v-text-field
                 v-model="order.customer_name"
-                label="Nome do Cliente"
+                label="Nome do Cliente (para o seu sistema)"
                 variant="outlined"
                 prepend-inner-icon="mdi-account-outline"
                 :rules="[rules.required]"
                 class="mb-4"
               ></v-text-field>
+
+              <v-autocomplete
+                v-model="selectedCliente"
+                :items="clientesVhsys"
+                item-title="fantasia_cliente"
+                label="Cliente no VHSYS"
+                variant="outlined"
+                prepend-inner-icon="mdi-account-search-outline"
+                :rules="[rules.required]"
+                class="mb-4"
+                :loading="loadingClientes"
+                placeholder="Digite para buscar um cliente..."
+                return-object
+              >
+                <template v-slot:item="{ props, item }">
+                  <v-list-item v-bind="props" :title="item.raw.fantasia_cliente" :subtitle="`ID: ${item.raw.id_cliente}`"></v-list-item>
+                </template>
+                <template v-slot:selection="{ item }">
+                  {{ item.raw.fantasia_cliente }}
+                </template>
+              </v-autocomplete>
+
+               <v-autocomplete
+                v-model="selectedVendedor"
+                :items="vendedoresVhsys"
+                item-title="razao_vendedor"
+                label="Vendedor no VHSYS"
+                variant="outlined"
+                prepend-inner-icon="mdi-account-tie-outline"
+                :rules="[rules.required]"
+                class="mb-4"
+                :loading="loadingVendedores"
+                placeholder="Digite para buscar um vendedor..."
+                return-object
+              >
+                <template v-slot:item="{ props, item }">
+                  <v-list-item v-bind="props" :title="item.raw.razao_vendedor"></v-list-item>
+                </template>
+                <template v-slot:selection="{ item }">
+                  {{ item.raw.razao_vendedor }}
+                </template>
+              </v-autocomplete>
 
               <v-select
                 v-model="order.has_down_payment"
@@ -40,7 +82,6 @@
                 :rules="[rules.requiredFile]"
                 accept="image/*,.pdf"
               ></v-file-input>
-
             </v-card-text>
           </v-card>
         </template>
@@ -49,14 +90,34 @@
           <v-card flat color="transparent">
             <v-card-text>
                <h3 class="text-h6 font-weight-bold mb-6 text-center">Detalhes da Estampa</h3>
+               <v-autocomplete
+                    v-model="selectedProduct"
+                    :items="produtosVhsys"
+                    item-title="desc_produto"
+                    label="Produto/Estampa (do VHSYS)"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-tag-outline"
+                    :rules="[rules.required]"
+                    class="mb-4"
+                    :loading="loadingProdutos"
+                    placeholder="Selecione a estampa base..."
+                    return-object
+                >
+                    <template v-slot:item="{ props, item }">
+                        <v-list-item v-bind="props" :title="item.raw.desc_produto" :subtitle="`Código: ${item.raw.cod_produto}`"></v-list-item>
+                    </template>
+                    <template v-slot:selection="{ item }">
+                        {{ item.raw.desc_produto }}
+                    </template>
+                </v-autocomplete>
+
                <v-textarea
                 v-model="order.stamp_details"
                 label="Observações e detalhes para o time de design"
                 placeholder="Ex: Estampa de onça com fundo azul, logo da empresa no canto, etc."
                 variant="outlined"
-                rows="5"
+                rows="4"
                 prepend-inner-icon="mdi-palette-swatch-outline"
-                :rules="[rules.required]"
               ></v-textarea>
             </v-card-text>
           </v-card>
@@ -65,7 +126,7 @@
         <template v-slot:item.3>
            <v-card flat color="transparent">
             <v-card-text>
-              <h3 class="text-h6 font-weight-bold mb-6 text-center">Material e Quantidade</h3>
+              <h3 class="text-h6 font-weight-bold mb-6 text-center">Material, Quantidade e Valores</h3>
                 <v-autocomplete
                     v-model="order.fabric_type"
                     :items="stockItems"
@@ -83,15 +144,30 @@
                     </template>
               </v-autocomplete>
 
-              <v-text-field
-                v-model.number="order.quantity_meters"
-                label="Metragem (metros)"
-                type="number"
-                variant="outlined"
-                prepend-inner-icon="mdi-ruler-square"
-                :rules="[rules.required, rules.positive]"
-                :disabled="!order.fabric_type"
-              ></v-text-field>
+              <v-row>
+                <v-col cols="12" sm="6">
+                  <v-text-field
+                    v-model.number="order.quantity_meters"
+                    label="Metragem (metros)"
+                    type="number"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-ruler-square"
+                    :rules="[rules.required, rules.positive]"
+                    :disabled="!order.fabric_type"
+                  ></v-text-field>
+                </v-col>
+                <v-col cols="12" sm="6">
+                  <v-text-field
+                    v-model.number="order.vhsys_details.valor_unit_produto"
+                    label="Valor Unitário (por metro)"
+                    type="number"
+                    variant="outlined"
+                    prepend-inner-icon="mdi-currency-usd"
+                    :rules="[rules.required, rules.positive]"
+                    prefix="R$"
+                  ></v-text-field>
+                </v-col>
+              </v-row>
 
               <div v-if="selectedStockItem" class="mt-n2 mb-4 px-2">
                     <div class="d-flex justify-space-between text-caption text-grey">
@@ -136,11 +212,28 @@
 import { ref, onMounted, computed, reactive, watch } from 'vue';
 import { supabase } from '@/api/supabase';
 import { useUserStore } from '@/stores/user';
+import { getClientes, getVendedores, getProdutos } from '@/api/vhsys_api';
 
 type StockItem = {
   id: string;
   fabric_type: string;
   available_meters: number;
+};
+
+type ClienteVhsys = {
+  id_cliente: number;
+  fantasia_cliente: string;
+};
+
+type VendedorVhsys = {
+  id_vendedor: number;
+  razao_vendedor: string;
+};
+
+type ProdutoVhsys = {
+    id_produto: number;
+    desc_produto: string;
+    cod_produto: string;
 };
 
 type Order = {
@@ -150,6 +243,15 @@ type Order = {
   quantity_meters: number | null;
   has_down_payment: boolean;
   down_payment_proof_file: File[] | File | null;
+  vhsys_details: {
+    id_cliente_vhsys: number | null;
+    fantasia_cliente_vhsys: string | null;
+    id_vendedor_vhsys: number | null;
+    razao_vendedor_vhsys: string | null;
+    id_produto_vhsys: number | null;
+    desc_produto_vhsys: string | null;
+    valor_unit_produto: number | null;
+  };
 };
 
 type Feedback = {
@@ -163,6 +265,16 @@ const stockItems = ref<StockItem[]>([]);
 const loadingStock = ref(true);
 const isSubmitting = ref(false);
 
+const clientesVhsys = ref<ClienteVhsys[]>([]);
+const vendedoresVhsys = ref<VendedorVhsys[]>([]);
+const produtosVhsys = ref<ProdutoVhsys[]>([]);
+const loadingClientes = ref(true);
+const loadingVendedores = ref(true);
+const loadingProdutos = ref(true);
+const selectedCliente = ref<ClienteVhsys | null>(null);
+const selectedVendedor = ref<VendedorVhsys | null>(null);
+const selectedProduct = ref<ProdutoVhsys | null>(null);
+
 const order = reactive<Order>({
   customer_name: '',
   stamp_details: '',
@@ -170,12 +282,21 @@ const order = reactive<Order>({
   quantity_meters: null,
   has_down_payment: false,
   down_payment_proof_file: null,
+  vhsys_details: {
+    id_cliente_vhsys: null,
+    fantasia_cliente_vhsys: null,
+    id_vendedor_vhsys: null,
+    razao_vendedor_vhsys: null,
+    id_produto_vhsys: null,
+    desc_produto_vhsys: null,
+    valor_unit_produto: null,
+  }
 });
 
 const feedback = reactive<Feedback>({ message: '', type: 'success' });
 
 const stepperItems = [
-    { title: 'Cliente & Entrada', icon: 'mdi-account-cash' },
+    { title: 'Cliente & Vendedor', icon: 'mdi-account-cash' },
     { title: 'Estampa', icon: 'mdi-palette-swatch-outline' },
     { title: 'Material', icon: 'mdi-layers-triple-outline' },
 ];
@@ -207,12 +328,13 @@ const isStepValid = computed(() => {
                     fileIsValid = false;
                 }
             }
-            return !!order.customer_name?.trim() && fileIsValid;
+            return !!order.customer_name?.trim() && !!selectedCliente.value && !!selectedVendedor.value && fileIsValid;
         }
-        case 2: return !!order.stamp_details?.trim();
+        case 2: return !!selectedProduct.value;
         case 3:
             const quantity = order.quantity_meters;
-            return !!order.fabric_type && !!(quantity && quantity > 0);
+            const unitValue = order.vhsys_details.valor_unit_produto;
+            return !!order.fabric_type && !!(quantity && quantity > 0) && !!(unitValue && unitValue > 0);
         default: return true;
     }
 });
@@ -243,6 +365,29 @@ const fetchStock = async () => {
   }
 };
 
+const fetchVhsysData = async () => {
+  loadingClientes.value = true;
+  loadingVendedores.value = true;
+  loadingProdutos.value = true;
+  try {
+    const [clientes, vendedores, produtos] = await Promise.all([
+      getClientes(),
+      getVendedores(),
+      getProdutos()
+    ]);
+    clientesVhsys.value = clientes;
+    vendedoresVhsys.value = vendedores;
+    produtosVhsys.value = produtos;
+  } catch (error) {
+    showFeedback('Erro ao carregar dados do VHSYS. Verifique a conexão e as chaves da API.', 'error');
+  } finally {
+    loadingClientes.value = false;
+    loadingVendedores.value = false;
+    loadingProdutos.value = false;
+  }
+};
+
+
 const showFeedback = (message: string, type: 'success' | 'error') => {
     feedback.message = message;
     feedback.type = type;
@@ -250,6 +395,20 @@ const showFeedback = (message: string, type: 'success' | 'error') => {
 
 const submitOrder = async () => {
   if (!isFormValid.value || !userStore.profile) return;
+
+  if(selectedCliente.value) {
+      order.vhsys_details.id_cliente_vhsys = selectedCliente.value.id_cliente;
+      order.vhsys_details.fantasia_cliente_vhsys = selectedCliente.value.fantasia_cliente;
+  }
+  if(selectedVendedor.value) {
+      order.vhsys_details.id_vendedor_vhsys = selectedVendedor.value.id_vendedor;
+      order.vhsys_details.razao_vendedor_vhsys = selectedVendedor.value.razao_vendedor;
+  }
+  if(selectedProduct.value) {
+      order.vhsys_details.id_produto_vhsys = selectedProduct.value.id_produto;
+      order.vhsys_details.desc_produto_vhsys = selectedProduct.value.desc_produto;
+  }
+
   isSubmitting.value = true;
   let proofUrl: string | null = null;
 
@@ -276,16 +435,16 @@ const submitOrder = async () => {
       p_details: {
         stamp_details: order.stamp_details,
         fabric_type: order.fabric_type,
+        vhsys: order.vhsys_details
       },
       p_store_id: userStore.profile.store_id,
       p_created_by: userStore.profile.id,
-      p_value: 0,
+      p_value: (order.quantity_meters || 0) * (order.vhsys_details.valor_unit_produto || 0),
       p_has_down_payment: order.has_down_payment,
       p_down_payment_proof_url: proofUrl,
     });
     if (rpcError) throw rpcError;
 
-    // --- CORREÇÃO: Lógica de notificação movida para cá ---
     const { data: designers, error: designerError } = await supabase
       .from('profiles')
       .select('id')
@@ -302,7 +461,6 @@ const submitOrder = async () => {
       }));
       await supabase.from('notifications').insert(notifications);
     }
-    // --- FIM DA CORREÇÃO ---
 
     showFeedback('Pedido enviado para o design com sucesso!', 'success');
     resetForm();
@@ -324,7 +482,19 @@ const resetForm = () => {
         quantity_meters: null,
         has_down_payment: false,
         down_payment_proof_file: null,
+        vhsys_details: {
+          id_cliente_vhsys: null,
+          fantasia_cliente_vhsys: null,
+          id_vendedor_vhsys: null,
+          razao_vendedor_vhsys: null,
+          id_produto_vhsys: null,
+          desc_produto_vhsys: null,
+          valor_unit_produto: null,
+        }
     });
+    selectedCliente.value = null;
+    selectedVendedor.value = null;
+    selectedProduct.value = null;
     step.value = 1;
 }
 
@@ -334,6 +504,7 @@ watch(() => order.fabric_type, () => {
 
 onMounted(() => {
   fetchStock();
+  fetchVhsysData();
 });
 </script>
 

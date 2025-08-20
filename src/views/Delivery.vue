@@ -50,11 +50,7 @@
                   <p class="info-line"><v-icon size="small">mdi-ruler-square</v-icon> {{ order.quantity_meters }}m</p>
                   <v-divider class="my-3"></v-divider>
                   <div class="d-flex justify-space-between align-center text-caption">
-                    <div class="text-info ml-auto" v-if="order.status !== 'completed'">
-                      <v-icon size="x-small">mdi-clock-end</v-icon>
-                      Finaliza em {{ formatDate(order.completion_date, 'dd/MM') }}
-                    </div>
-                    <div class="text-success ml-auto" v-else>
+                    <div class="text-success ml-auto">
                       <v-icon size="x-small">mdi-check-decagram-outline</v-icon>
                       Pronto em {{ formatDate(order.completion_date, 'dd/MM') }}
                     </div>
@@ -101,6 +97,11 @@
                       </div>
                       <p class="info-line"><v-icon size="small">mdi-layers-triple-outline</v-icon> {{ order.details.fabric_type }}</p>
                       <p class="info-line"><v-icon size="small">mdi-ruler-square</v-icon> {{ order.quantity_meters }}m</p>
+                      <v-divider v-if="order.status !== 'completed'" class="my-3"></v-divider>
+                      <div v-if="order.status !== 'completed'" class="d-flex justify-space-between align-center text-caption text-info">
+                        <v-icon size="x-small">mdi-clock-end</v-icon>
+                        Previsão de Conclusão: {{ formatDate(order.completion_date, 'dd/MM') }}
+                      </div>
                   </v-card-text>
                 <v-fade-transition>
                   <v-card-actions class="actions-overlay" v-if="!isPast(day.date) && order.status === 'completed' && !order.isConfirmed">
@@ -187,7 +188,7 @@ type Order = {
   customer_name: string;
   quantity_meters: number;
   status: string;
-  production_date: string;
+  production_date: string | null;
   details: { fabric_type: string; };
   completion_date?: Date;
   actual_delivery_date?: Date | null;
@@ -196,7 +197,7 @@ type Order = {
   creator: { full_name: string; } | null;
 };
 
-// Estado
+// State
 const userStore = useUserStore();
 const loading = ref(true);
 const showDetailModal = ref(false);
@@ -214,7 +215,6 @@ const historyHeaders = [
   { title: 'Vendedor', key: 'creator.full_name' },
 ];
 
-// Lógica de Datas e Navegação
 const isPast = (date: Date): boolean => isBefore(date, startOfToday());
 const nextWeek = () => { currentDeliveryWeekStart.value = addDays(currentDeliveryWeekStart.value, 7); };
 const previousWeek = () => { currentDeliveryWeekStart.value = subDays(currentDeliveryWeekStart.value, 7); };
@@ -256,8 +256,8 @@ function addBusinessDays(date: Date, days: number): Date {
 
   while (addedDays < targetDays) {
     newDate.setDate(newDate.getDate() + step);
-    const dayOfWeek = newDate.getDay(); // Domingo = 0
-    if (dayOfWeek !== 0) { // Não conta domingos
+    const dayOfWeek = newDate.getDay();
+    if (dayOfWeek !== 0) {
       addedDays++;
     }
   }
@@ -266,43 +266,46 @@ function addBusinessDays(date: Date, days: number): Date {
 
 const calculateInitialDeliveryDate = (completionDate: Date): Date => {
     let deliveryDate = addDays(new Date(completionDate), 1);
-    const deliveryDaysOfWeek = [2, 4, 6]; // Terça, Quinta, Sábado
+    const deliveryDaysOfWeek = [2, 4, 6];
     while (!deliveryDaysOfWeek.includes(getDay(deliveryDate))) {
         deliveryDate = addDays(deliveryDate, 1);
     }
     return deliveryDate;
 }
 
-// Funções de Manipulação de Pedidos
 const processAndDistributeOrders = (orders: Order[]) => {
   const scheduled: Order[] = [];
   const notScheduled: Order[] = [];
   const history: Order[] = [];
-  const thirtyDaysAgo = subDays(startOfToday(), 30);
 
   orders.forEach(order => {
-    order.completion_date = addBusinessDays(parseISO(order.production_date), 3);
+    if (order.production_date) {
+        order.completion_date = addBusinessDays(parseISO(order.production_date), 3);
+    }
     order.isConfirmed = !!order.delivery_confirmed_at;
 
-    const deliveryDate = order.actual_delivery_date
-      ? parseISO(order.actual_delivery_date as any)
-      : calculateInitialDeliveryDate(order.completion_date);
-    order.actual_delivery_date = deliveryDate;
-
-    if (order.status === 'completed' && !order.actual_delivery_date) {
-        notScheduled.push(order);
-    } else {
+    if (order.status === 'completed') {
+        if (order.actual_delivery_date) {
+            order.actual_delivery_date = parseISO(order.actual_delivery_date as any);
+            scheduled.push(order);
+        } else {
+            notScheduled.push(order);
+        }
+    } else if (['production_queue', 'in_printing', 'in_cutting'].includes(order.status) && order.completion_date) {
+        order.actual_delivery_date = calculateInitialDeliveryDate(order.completion_date);
         scheduled.push(order);
     }
 
-    if (order.isConfirmed) {
+    if (order.isConfirmed && order.delivery_confirmed_at) {
         history.push(order);
     }
   });
 
   allScheduledOrders.value = scheduled;
   toBeScheduledOrders.value = notScheduled;
-  deliveredOrders.value = history.filter(o => o.isConfirmed && isBefore(o.actual_delivery_date!, startOfToday())).sort((a, b) => (b.actual_delivery_date?.getTime() || 0) - (a.actual_delivery_date?.getTime() || 0));
+  deliveredOrders.value = history
+    .filter(o => o.actual_delivery_date && isBefore(o.actual_delivery_date, startOfToday()))
+    .sort((a, b) => (b.actual_delivery_date?.getTime() || 0) - (a.actual_delivery_date?.getTime() || 0));
 };
 
 const onDragEnd = async (event: any) => {
@@ -392,7 +395,6 @@ const rejectDelivery = async (order: Order) => {
             description: 'Agendamento de entrega revertido. Pedido retornou para a fila de agendamento.'
         });
 
-        // Manually update local state for immediate feedback
         const index = allScheduledOrders.value.findIndex(o => o.id === order.id);
         if (index > -1) {
             const revertedOrder = allScheduledOrders.value.splice(index, 1)[0];
@@ -407,7 +409,7 @@ const rejectDelivery = async (order: Order) => {
 
     } catch (err: any) {
         console.error('Erro ao cancelar entrega:', err.message);
-        await fetchScheduledOrders(); // Refetch on error
+        await fetchScheduledOrders();
     }
 };
 
@@ -427,15 +429,20 @@ const fetchScheduledOrders = async () => {
   try {
     const { data, error } = await supabase
       .from('orders')
-      .select('id, customer_name, quantity_meters, status, production_date, details, creator:created_by(full_name), production_schedule!inner(delivery_confirmed_at, actual_delivery_date)')
-      .in('status', ['completed', 'in_printing', 'in_cutting']);
+      .select(`
+        id, customer_name, quantity_meters, status, production_date, details,
+        creator:created_by(full_name),
+        production_schedule(delivery_confirmed_at, actual_delivery_date)
+      `)
+      .in('status', ['completed', 'production_queue', 'in_printing', 'in_cutting'])
+      .not('production_date', 'is', null);
 
     if (error) throw error;
 
     const formattedData = data?.map((order: any) => ({
       ...order,
-      actual_delivery_date: order.production_schedule[0]?.actual_delivery_date,
-      delivery_confirmed_at: order.production_schedule[0]?.delivery_confirmed_at,
+      actual_delivery_date: order.production_schedule?.[0]?.actual_delivery_date,
+      delivery_confirmed_at: order.production_schedule?.[0]?.delivery_confirmed_at,
     })) || [];
 
     processAndDistributeOrders(formattedData as Order[]);

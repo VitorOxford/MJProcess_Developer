@@ -1,6 +1,7 @@
+// src/stores/user.ts
 import { defineStore } from 'pinia';
 import { supabase } from '@/api/supabase';
-import type { Profile } from '@/types'; // Criaremos este arquivo de tipos a seguir
+import type { Profile } from '@/types';
 
 export const useUserStore = defineStore('user', {
   state: () => ({
@@ -30,6 +31,7 @@ export const useUserStore = defineStore('user', {
     async fetchProfile() {
       if (!this.session?.user) return;
       try {
+        // A query agora busca todas as colunas, incluindo as novas
         const { data: profileData, error } = await supabase
           .from('profiles')
           .select('*')

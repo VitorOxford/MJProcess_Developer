@@ -39,7 +39,7 @@
           rounded="lg"
           class="nav-item"
           :class="{
-            'highlight-red': item.value === 'approvals',
+            'highlight-red': item.value === 'approvals' ,
             'highlight-green': item.value === 'delivery'
           }"
           @mouseenter="(event) => toggleHoverEffect(event, true, item.value)"
@@ -76,53 +76,48 @@
           >
             <template v-slot:activator="{ props }">
               <v-btn v-bind="props" icon variant="text" title="Notificações">
-                <v-badge :content="unreadNotifications" color="error" :model-value="unreadNotifications > 0" dot>
+                <v-badge :content="unreadNotifications" color="error" :model-value="unreadNotifications > 0">
                   <v-icon :class="{ 'bell-ringing': isBellRinging }">mdi-bell-outline</v-icon>
                 </v-badge>
               </v-btn>
             </template>
-            <v-card class="glassmorphism-card notifications-panel" min-width="350">
-              <v-card-title class="pa-3 dialog-header">
-                <v-icon start>mdi-bell-ring</v-icon>
-                Notificações
+
+            <v-card class="notifications-panel" width="400" max-height="500">
+              <v-toolbar color="transparent" density="compact">
+                <v-toolbar-title class="font-weight-bold text-body-1">Notificações</v-toolbar-title>
                 <v-spacer></v-spacer>
-                <v-btn v-if="hasReadNotifications" size="small" variant="tonal" @click="clearReadNotifications">Limpar</v-btn>
-              </v-card-title>
+                <v-btn v-if="notifications.length > 0" size="small" variant="text" @click="clearAllNotifications" :loading="isClearing">Limpar Tudo</v-btn>
+              </v-toolbar>
+              <v-divider></v-divider>
+
               <div class="notification-list-scroll">
-                <div v-if="notifications.length === 0" class="text-center text-grey pa-8">
-                  <v-icon size="48" class="mb-2">mdi-check-all</v-icon>
-                  <p>Você não tem novas notificações.</p>
+                <div v-if="notifications.length === 0" class="empty-state-notifications">
+                  <v-icon size="64">mdi-check-all</v-icon>
+                  <p class="mt-4">Nenhuma notificação por aqui.</p>
                 </div>
-                <template v-else>
-                  <v-list class="bg-transparent py-0">
-                    <v-list-subheader class="font-weight-bold">Recentes</v-list-subheader>
+                <v-list v-else lines="two" class="bg-transparent py-0">
+                  <div v-for="notification in notifications" :key="notification.id" class="notification-item-wrapper">
                     <v-list-item
-                      v-for="notification in recentNotifications"
-                      :key="notification.id"
                       @click="handleNotificationClick(notification)"
+                      class="notification-list-item"
                       :class="{ 'notification-read': notification.is_read }"
-                      class="notification-item"
-                      :active="!notification.is_read"
                     >
-                      <v-list-item-title class="text-wrap">{{ notification.content }}</v-list-item-title>
-                      <v-list-item-subtitle>{{ formatDistance(notification.created_at) }} atrás</v-list-item-subtitle>
+                      <template v-slot:prepend>
+                        <v-icon :color="notification.is_read ? 'grey' : 'primary'">mdi-circle-medium</v-icon>
+                      </template>
+                      <v-list-item-title class="text-wrap font-weight-medium text-body-2">{{ notification.content }}</v-list-item-title>
+                      <v-list-item-subtitle class="mt-1">{{ formatDistance(notification.created_at) }} atrás</v-list-item-subtitle>
                     </v-list-item>
-                  </v-list>
-                  <v-divider></v-divider>
-                  <v-list class="bg-transparent py-0" v-if="olderNotifications.length > 0">
-                    <v-list-subheader class="font-weight-bold">Anteriores</v-list-subheader>
-                    <v-list-item
-                      v-for="notification in olderNotifications"
-                      :key="notification.id"
-                      @click="handleNotificationClick(notification)"
-                      :class="{ 'notification-read': notification.is_read }"
-                      class="notification-item"
-                    >
-                      <v-list-item-title class="text-wrap">{{ notification.content }}</v-list-item-title>
-                      <v-list-item-subtitle>{{ formatDistance(notification.created_at) }} atrás</v-list-item-subtitle>
-                    </v-list-item>
-                  </v-list>
-                </template>
+                    <v-btn
+                        icon="mdi-close"
+                        variant="text"
+                        size="x-small"
+                        class="delete-notification-btn"
+                        @click.stop="deleteNotification(notification.id)"
+                        title="Apagar notificação"
+                    ></v-btn>
+                  </div>
+                </v-list>
               </div>
             </v-card>
           </v-menu>
@@ -220,12 +215,10 @@ const toastMessage = ref('');
 const ordersPendingApproval = ref(0);
 const showPendingApprovalAlert = ref(false);
 const pendingAlertContent = ref({ title: '', message: '' });
+const isClearing = ref(false);
 
 const unreadNotifications = computed(() => notifications.value.filter(n => !n.is_read).length);
 const hasReadNotifications = computed(() => notifications.value.some(n => n.is_read));
-
-const recentNotifications = computed(() => notifications.value.filter(n => !n.is_read || isToday(new Date(n.created_at))).slice(0, 5));
-const olderNotifications = computed(() => notifications.value.filter(n => n.is_read && !isToday(new Date(n.created_at))).slice(0, 10));
 
 const allNavItems = [
   { icon: 'mdi-view-dashboard-outline', title: 'Dashboard', value: 'home', to: { name: 'Home' }, roles: ['vendedor', 'designer', 'producao', 'admin'] },
@@ -313,23 +306,45 @@ const setupApprovalListener = () => {
 const handleNotificationClick = async (notification: Notification) => {
     if (!notification.is_read) {
         try {
-            await supabase.from('notifications').update({ is_read: true }).eq('id', notification.id);
+            const { error } = await supabase.from('notifications').update({ is_read: true }).eq('id', notification.id);
+            if (error) throw error;
             const index = notifications.value.findIndex(n => n.id === notification.id);
             if (index !== -1) notifications.value[index].is_read = true;
         } catch(error) { console.error("Erro ao marcar notificação como lida:", error); }
     }
-    if (notification.redirect_url) { router.push(notification.redirect_url); }
+    if (notification.redirect_url) {
+        router.push(notification.redirect_url);
+        notificationMenu.value = false;
+    }
 };
 
-const clearReadNotifications = () => {
-    notifications.value = notifications.value.filter(n => !n.is_read);
+const clearAllNotifications = async () => {
+    if (!userStore.user) return;
+    isClearing.value = true;
+    try {
+        const { error } = await supabase.from('notifications').delete().or(`recipient_id.eq.${userStore.user.id},recipient_id.is.null`);
+        if (error) throw error;
+        notifications.value = [];
+    } catch (error) {
+        console.error("Erro ao limpar todas as notificações:", error);
+    } finally {
+        isClearing.value = false;
+    }
+};
+
+const deleteNotification = async (id: string) => {
+    try {
+        const { error } = await supabase.from('notifications').delete().eq('id', id);
+        if (error) throw error;
+        notifications.value = notifications.value.filter(n => n.id !== id);
+    } catch (error) {
+        console.error("Erro ao apagar notificação:", error);
+    }
 };
 
 const handleNewNotification = (payload: any) => {
     const newNotification = payload.new as Notification;
 
-    // **CORREÇÃO APLICADA AQUI**
-    // Lógica para interpretar a notificação de alerta
     if (newNotification.content.startsWith('[ALERT_PENDING_APPROVAL]')) {
       const parts = newNotification.content.replace('[ALERT_PENDING_APPROVAL]', '').split('::');
       pendingAlertContent.value = {
@@ -339,9 +354,8 @@ const handleNewNotification = (payload: any) => {
       showPendingApprovalAlert.value = true;
       notificationSound.value?.play().catch(e => console.error("Erro ao tocar som:", e));
     } else {
-      // Comportamento para notificações normais
       notifications.value.unshift(newNotification);
-      notificationSound.value?.play().catch(e => console.error("Erro ao tocar som:", e));
+      notificationSound.value?.play().catch(e => console.error("Audio playback failed:", e));
       toastMessage.value = newNotification.content;
       showToast.value = true;
       isBellRinging.value = true;
@@ -452,18 +466,6 @@ onUnmounted(() => {
   animation-delay: 10s;
 }
 
-@keyframes particles-white {
-  0% { transform: translate(-50%, -50%) rotate(0deg) scale(0.5); opacity: 0; }
-  10% { opacity: 1; }
-  100% { transform: translate(-50%, -50%) rotate(360deg) scale(1.5); opacity: 0; }
-}
-
-@keyframes particles-gold {
-  0% { transform: translate(-50%, -50%) rotate(0deg) scale(0.5); opacity: 0; }
-  10% { opacity: 1; }
-  100% { transform: translate(-50%, -50%) rotate(360deg) scale(1.5); opacity: 0; }
-}
-
 .v-application, .v-application__wrap {
   color: #E0E0E0 !important;
   background: transparent !important;
@@ -479,16 +481,14 @@ onUnmounted(() => {
   border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
 }
 
-/* **CORREÇÃO DEFINITIVA PARA ROLAGEM** */
 .v-navigation-drawer > .v-navigation-drawer__content {
   display: flex;
   flex-direction: column;
 }
 .main-nav-list {
-  flex-grow: 1; /* Permite que a lista cresça e empurre o rodapé */
-  overflow-y: auto; /* Adiciona a rolagem quando necessário */
+  flex-grow: 1;
+  overflow-y: auto;
 }
-/* FIM DA CORREÇÃO */
 
 @media (max-width: 600px) {
   .v-navigation-drawer.glassmorphism-sidebar {
@@ -542,44 +542,116 @@ onUnmounted(() => {
   --hover-color: rgba(76, 175, 79, 0.973);
 }
 
-@keyframes gradient-animation {
-  0% { background-position: 200% 0; }
-  100% { background-position: -100% 0; }
-}
-
 .quick-actions, .user-footer { flex-shrink: 0; }
 .glassmorphism-app-bar {
   background-color: rgba(20, 20, 25, 0.6) !important;
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
 }
-.notifications-panel { max-height: 500px; display: flex; flex-direction: column; }
-.notification-list-scroll { flex-grow: 1; overflow-y: auto; }
-.notification-item.notification-read {
-    opacity: 0.6;
-    .v-list-item-title, .v-list-item-subtitle { color: rgba(255, 255, 255, 0.5); }
-}
-.notification-item:hover { background-color: rgba(255,255,255,0.05); }
 .toast-notification .v-snackbar__content { color: #FFFFFF !important; font-weight: 500; }
-.bell-ringing { animation: ring 1.5s ease-in-out infinite; }
-@keyframes ring {
-  0% { transform: rotate(0); } 10% { transform: rotate(25deg); } 20% { transform: rotate(-25deg); }
-  30% { transform: rotate(20deg); } 40% { transform: rotate(-20deg); } 50% { transform: rotate(15deg); }
-  60% { transform: rotate(-15deg); } 70% { transform: rotate(5deg); } 80% { transform: rotate(-5deg); }
-  90%, 100% { transform: rotate(0); }
-}
+
 .animated-title {
   display: block; height: 24px; position: relative; overflow: hidden;
   .default-text, .animated-text { position: absolute; top: 0; left: 0; width: 100%; text-align: left; }
   .default-text { animation: text-toggle 6s infinite; }
   .animated-text { animation: text-toggle-rev 6s infinite; }
 }
+
+/* --- ESTILOS DO NOVO MENU DE NOTIFICAÇÕES --- */
+
+.notifications-panel {
+  backdrop-filter: blur(25px) saturate(150%);
+  -webkit-backdrop-filter: blur(25px) saturate(150%);
+  background-color: rgba(40, 40, 45, 0.85) !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+.notification-list-scroll {
+  flex-grow: 1;
+  overflow-y: auto; /* Garante o scroll interno */
+}
+
+.empty-state-notifications {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 250px;
+  color: #9E9E9E;
+}
+
+.notification-item-wrapper {
+  position: relative;
+
+  .delete-notification-btn {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.2s ease-in-out;
+  }
+
+  &:hover .delete-notification-btn {
+    opacity: 1;
+  }
+}
+
+.notification-list-item {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  transition: background-color 0.2s ease-in-out;
+
+  &:hover {
+    background-color: rgba(var(--v-theme-primary-rgb), 0.1);
+  }
+
+  &.notification-read {
+    opacity: 0.7;
+  }
+}
+/* --- ANIMAÇÕES COMPLETAS --- */
+
+@keyframes particles-white {
+  0% { transform: translate(-50%, -50%) rotate(0deg) scale(0.5); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translate(-50%, -50%) rotate(360deg) scale(1.5); opacity: 0; }
+}
+
+@keyframes particles-gold {
+  0% { transform: translate(-50%, -50%) rotate(0deg) scale(0.5); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translate(-50%, -50%) rotate(360deg) scale(1.5); opacity: 0; }
+}
+
+@keyframes ring {
+  0% { transform: rotate(0); }
+  10% { transform: rotate(25deg); }
+  20% { transform: rotate(-25deg); }
+  30% { transform: rotate(20deg); }
+  40% { transform: rotate(-20deg); }
+  50% { transform: rotate(15deg); }
+  60% { transform: rotate(-15deg); }
+  70% { transform: rotate(5deg); }
+  80% { transform: rotate(-5deg); }
+  90%, 100% { transform: rotate(0); }
+}
+
 @keyframes text-toggle {
-  0%, 20% { opacity: 1; transform: translateY(0); } 25%, 45% { opacity: 0; transform: translateY(-100%); }
+  0%, 20% { opacity: 1; transform: translateY(0); }
+  25%, 45% { opacity: 0; transform: translateY(-100%); }
   50%, 100% { opacity: 1; transform: translateY(0); }
 }
 @keyframes text-toggle-rev {
-  0%, 20% { opacity: 0; transform: translateY(100%); } 25%, 45% { opacity: 1; transform: translateY(0); }
+  0%, 20% { opacity: 0; transform: translateY(100%); }
+  25%, 45% { opacity: 1; transform: translateY(0); }
   50%, 100% { opacity: 0; transform: translateY(100%); }
+}
+
+@keyframes gradient-animation {
+  0% { background-position: 200% 0; }
+  100% { background-position: -100% 0; }
 }
 </style>
